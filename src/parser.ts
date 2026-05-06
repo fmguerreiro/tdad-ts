@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import fg from "fast-glob";
 import { Project, ts, type SourceFile } from "ts-morph";
 import {
   Graph,
@@ -12,6 +10,7 @@ import {
 } from "./graph.js";
 import { isTestPath } from "./test-detect.js";
 import {
+  hashContent,
   loadCache,
   rehydrate,
   saveCache,
@@ -41,7 +40,10 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   const patterns = options.include ?? DEFAULT_INCLUDE;
   const ignore = [...DEFAULT_EXCLUDE, ...(options.exclude ?? [])];
 
-  const snapshot = await snapshotFilesystem(root, patterns, ignore);
+  const tsConfigHash = options.tsConfigFilePath
+    ? hashContent(fs.readFileSync(path.resolve(options.tsConfigFilePath), "utf8"))
+    : undefined;
+  const snapshot = await snapshotFilesystem(root, patterns, ignore, tsConfigHash);
 
   if (options.cachePath) {
     const cached = loadCache(options.cachePath);
@@ -77,7 +79,7 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
       kind: "File",
       id: fileId(relative),
       path: relative,
-      contentHash: hash(content),
+      contentHash: hashContent(content),
       isTest: isTestPath(relative),
     };
     graph.addNode(fileNode);
@@ -181,8 +183,4 @@ function addImports(graph: Graph, project: Project, root: string): void {
 
 export function fileId(relativePath: string): string {
   return relativePath.split(path.sep).join("/");
-}
-
-function hash(content: string): string {
-  return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }

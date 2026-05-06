@@ -5,6 +5,7 @@ import { buildGraph } from "./parser.js";
 import { linkTests } from "./test-linker.js";
 import { buildMap, renderMap, writeMap } from "./map-writer.js";
 import { fileId } from "./parser.js";
+import { Graph } from "./graph.js";
 
 const program = new Command();
 program.name("tdad-ts").description("Graph-based test impact analyzer for TypeScript");
@@ -69,7 +70,7 @@ program.parseAsync(process.argv).catch((error: unknown) => {
   process.exit(1);
 });
 
-function countEdges(graph: ReturnType<typeof buildGraph> extends Promise<infer T> ? T : never): number {
+function countEdges(graph: Graph): number {
   let total = 0;
   for (const list of graph.edgesOut.values()) total += list.length;
   return total;

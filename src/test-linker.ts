@@ -1,5 +1,5 @@
 import path from "node:path";
-import { Graph, type FileNode } from "./graph.js";
+import { Graph, push, type FileNode } from "./graph.js";
 import { isTestPath, testStem } from "./test-detect.js";
 
 export function linkTests(graph: Graph): void {
@@ -20,23 +20,19 @@ export function linkTests(graph: Graph): void {
   }
 }
 
-interface StemIndex {
-  exact: Map<string, FileNode[]>;
-}
-
-function indexByStem(sources: Map<string, FileNode>): StemIndex {
+function indexByStem(sources: Map<string, FileNode>): Map<string, FileNode[]> {
   const exact = new Map<string, FileNode[]>();
   for (const file of sources.values()) {
     const stem = baseStem(file.path);
     push(exact, stem, file);
   }
-  return { exact };
+  return exact;
 }
 
 function resolveTargets(
   test: FileNode,
   sources: Map<string, FileNode>,
-  index: StemIndex,
+  sourcesByStem: Map<string, FileNode[]>,
   graph: Graph,
 ): FileNode[] {
   const stem = testStem(test.path);
@@ -58,7 +54,7 @@ function resolveTargets(
   // Tier 1c: exact stem match anywhere, but only if the test directly imports
   // the source. Catches projects with a separate tests/ directory that mirrors
   // source names (e.g. tests/unit/foo.test.ts paired with components/foo.ts).
-  const stemMatches = index.exact.get(stem);
+  const stemMatches = sourcesByStem.get(stem);
   if (stemMatches && stemMatches.length > 0) {
     const importedTargets: FileNode[] = [];
     for (const candidate of stemMatches) {
@@ -72,7 +68,7 @@ function resolveTargets(
   // Tier 2: progressive prefix truncation, filtered by directory proximity.
   let candidate = stem;
   while (candidate.length > 0) {
-    const matches = index.exact.get(candidate);
+    const matches = sourcesByStem.get(candidate);
     if (matches && matches.length > 0) {
       return tier3DirectoryProximity(test, matches);
     }
@@ -84,6 +80,9 @@ function resolveTargets(
   return [];
 }
 
+// Tier 1c walks only direct IMPORTS edges, so a test that imports through a
+// `src/index.ts` barrel (e.g. `import { renderWidget } from '../../src'`)
+// will miss the actual source module. Barrel-walking is deferred.
 function testImportsSource(graph: Graph, testId: string, sourceId: string): boolean {
   for (const edge of graph.outgoing(testId, "IMPORTS")) {
     if (edge.to === sourceId) return true;
@@ -91,7 +90,7 @@ function testImportsSource(graph: Graph, testId: string, sourceId: string): bool
   return false;
 }
 
-function tier3DirectoryProximity(test: FileNode, candidates: FileNode[]): FileNode[] {
+export function tier3DirectoryProximity(test: FileNode, candidates: FileNode[]): FileNode[] {
   // Reject candidates that share no directory ancestry with the test - prevents
   // prefix truncation from pinning unrelated files across the tree.
   const close = candidates.filter(
@@ -99,16 +98,21 @@ function tier3DirectoryProximity(test: FileNode, candidates: FileNode[]): FileNo
   );
   if (close.length === 0) return [];
   if (close.length === 1) return close;
-  let best: FileNode | undefined;
   let bestScore = -1;
+  let bestGroup: FileNode[] = [];
   for (const candidate of close) {
     const score = sharedPrefixDepth(test.path, candidate.path);
     if (score > bestScore) {
       bestScore = score;
-      best = candidate;
+      bestGroup = [candidate];
+    } else if (score === bestScore) {
+      bestGroup.push(candidate);
     }
   }
-  return best ? [best] : [];
+  bestGroup.sort((a, b) => a.path.localeCompare(b.path));
+  const winner = bestGroup[0];
+  if (!winner) throw new Error("tier3DirectoryProximity: empty bestGroup despite non-empty close");
+  return [winner];
 }
 
 function sharedPrefixDepth(a: string, b: string): number {
@@ -130,10 +134,4 @@ function baseStem(filePath: string): string {
   const base = path.posix.basename(filePath);
   const lastDot = base.lastIndexOf(".");
   return lastDot === -1 ? base : base.slice(0, lastDot);
-}
-
-function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
-  const list = map.get(key);
-  if (list) list.push(value);
-  else map.set(key, [value]);
 }

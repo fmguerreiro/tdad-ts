@@ -1,9 +1,11 @@
+// fingerprint already absorbs tsconfig content (see snapshotFilesystem signature):
+// when buildGraph passes a tsConfigFilePath, its hash is folded into the manifest
+// fingerprint so cache hits invalidate on tsconfig edits as well as source edits.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
 import { Graph, type Edge, type GraphNode } from "./graph.js";
-import { isTestPath } from "./test-detect.js";
 
 interface CacheFileSnapshot {
   path: string;
@@ -28,6 +30,7 @@ export async function snapshotFilesystem(
   root: string,
   patterns: string[],
   ignore: string[],
+  tsConfigHash?: string,
 ): Promise<FilesystemSnapshot> {
   const absoluteRoot = path.resolve(root);
   const found = await fg(patterns, {
@@ -43,7 +46,7 @@ export async function snapshotFilesystem(
     files.push({ path: relative, contentHash: hashContent(content) });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
-  const fingerprint = manifestFingerprint(files);
+  const fingerprint = manifestFingerprint(files, tsConfigHash);
   const filesByPath = new Map(files.map((file) => [file.path, file.contentHash]));
   return { files, fingerprint, filesByPath };
 }
@@ -51,8 +54,15 @@ export async function snapshotFilesystem(
 export function loadCache(cachePath: string): CachePayload | undefined {
   if (!fs.existsSync(cachePath)) return undefined;
   const raw = fs.readFileSync(cachePath, "utf8");
-  const parsed = JSON.parse(raw) as CachePayload;
-  if (parsed.version !== 1) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `failed to parse cache at ${cachePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!isCachePayload(parsed)) return undefined;
   return parsed;
 }
 
@@ -83,12 +93,32 @@ export function hashContent(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
-function manifestFingerprint(files: CacheFileSnapshot[]): string {
+function isCachePayload(value: unknown): value is CachePayload {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    candidate.version === 1 &&
+    typeof candidate.fingerprint === "string" &&
+    Array.isArray(candidate.files) &&
+    Array.isArray(candidate.nodes) &&
+    Array.isArray(candidate.edges)
+  );
+}
+
+function manifestFingerprint(
+  files: CacheFileSnapshot[],
+  tsConfigHash: string | undefined,
+): string {
   const hash = createHash("sha256");
   for (const file of files) {
     hash.update(file.path);
     hash.update("\0");
     hash.update(file.contentHash);
+    hash.update("\n");
+  }
+  if (tsConfigHash !== undefined) {
+    hash.update("tsconfig\0");
+    hash.update(tsConfigHash);
     hash.update("\n");
   }
   return hash.digest("hex").slice(0, 32);
