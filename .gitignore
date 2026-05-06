@@ -1,0 +1,6 @@
+node_modules
+dist
+.tdad
+*.log
+.DS_Store
+coverage

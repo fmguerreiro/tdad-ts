@@ -1,0 +1,167 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import fg from "fast-glob";
+import { Project, SyntaxKind, type SourceFile } from "ts-morph";
+import {
+  Graph,
+  type ClassNode,
+  type Edge,
+  type FileNode,
+  type FunctionNode,
+} from "./graph.js";
+import { isTestPath } from "./test-detect.js";
+
+export interface IndexOptions {
+  root: string;
+  include?: string[];
+  exclude?: string[];
+}
+
+const DEFAULT_INCLUDE = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
+const DEFAULT_EXCLUDE = [
+  "**/node_modules/**",
+  "**/dist/**",
+  "**/build/**",
+  "**/.next/**",
+  "**/.turbo/**",
+  "**/coverage/**",
+];
+
+export async function buildGraph(options: IndexOptions): Promise<Graph> {
+  const root = path.resolve(options.root);
+  const patterns = options.include ?? DEFAULT_INCLUDE;
+  const ignore = [...DEFAULT_EXCLUDE, ...(options.exclude ?? [])];
+
+  const files = await fg(patterns, {
+    cwd: root,
+    ignore,
+    absolute: true,
+    dot: false,
+  });
+
+  const project = new Project({
+    useInMemoryFileSystem: false,
+    skipAddingFilesFromTsConfig: true,
+    skipFileDependencyResolution: true,
+    compilerOptions: {
+      allowJs: true,
+      checkJs: false,
+      noEmit: true,
+    },
+  });
+
+  const graph = new Graph();
+  const sourceFiles: SourceFile[] = [];
+
+  for (const absolute of files) {
+    const relative = path.relative(root, absolute);
+    const content = fs.readFileSync(absolute, "utf8");
+    const fileNode: FileNode = {
+      kind: "File",
+      id: fileId(relative),
+      path: relative,
+      contentHash: hash(content),
+      isTest: isTestPath(relative),
+    };
+    graph.addNode(fileNode);
+    sourceFiles.push(project.createSourceFile(absolute, content, { overwrite: true }));
+  }
+
+  for (const sourceFile of sourceFiles) {
+    const relative = path.relative(root, sourceFile.getFilePath());
+    addContains(graph, sourceFile, relative);
+    addInherits(graph, sourceFile, relative);
+  }
+
+  addImports(graph, project, root);
+  return graph;
+}
+
+function addContains(graph: Graph, sourceFile: SourceFile, relativePath: string): void {
+  const fileIdString = fileId(relativePath);
+
+  for (const declaration of sourceFile.getFunctions()) {
+    const name = declaration.getName();
+    if (!name) continue;
+    const node: FunctionNode = {
+      kind: "Function",
+      id: `${fileIdString}#fn:${name}`,
+      name,
+      file: fileIdString,
+      startLine: declaration.getStartLineNumber(),
+      endLine: declaration.getEndLineNumber(),
+    };
+    if (graph.hasNode(node.id)) continue;
+    graph.addNode(node);
+    graph.addEdge({ kind: "CONTAINS", from: fileIdString, to: node.id });
+  }
+
+  for (const declaration of sourceFile.getClasses()) {
+    const name = declaration.getName();
+    if (!name) continue;
+    const node: ClassNode = {
+      kind: "Class",
+      id: `${fileIdString}#cls:${name}`,
+      name,
+      file: fileIdString,
+      startLine: declaration.getStartLineNumber(),
+      endLine: declaration.getEndLineNumber(),
+    };
+    if (graph.hasNode(node.id)) continue;
+    graph.addNode(node);
+    graph.addEdge({ kind: "CONTAINS", from: fileIdString, to: node.id });
+  }
+}
+
+function addInherits(graph: Graph, sourceFile: SourceFile, relativePath: string): void {
+  const fileIdString = fileId(relativePath);
+  for (const declaration of sourceFile.getClasses()) {
+    const name = declaration.getName();
+    if (!name) continue;
+    const childId = `${fileIdString}#cls:${name}`;
+    const baseClause = declaration.getExtends();
+    if (!baseClause) continue;
+    const baseName = baseClause.getExpression().getText();
+    const baseId = findClassByName(graph, baseName);
+    if (!baseId) continue;
+    graph.addEdge({ kind: "INHERITS", from: childId, to: baseId });
+  }
+}
+
+function findClassByName(graph: Graph, name: string): string | undefined {
+  for (const node of graph.nodes.values()) {
+    if (node.kind === "Class" && node.name === name) return node.id;
+  }
+  return undefined;
+}
+
+function addImports(graph: Graph, project: Project, root: string): void {
+  for (const sourceFile of project.getSourceFiles()) {
+    const fromRelative = path.relative(root, sourceFile.getFilePath());
+    const fromId = fileId(fromRelative);
+    const seen = new Set<string>();
+
+    for (const declaration of sourceFile.getImportDeclarations()) {
+      const target = declaration.getModuleSpecifierSourceFile();
+      if (!target) continue;
+      const toRelative = path.relative(root, target.getFilePath());
+      if (toRelative.startsWith("..") || path.isAbsolute(toRelative)) continue;
+      const toId = fileId(toRelative);
+      if (toId === fromId) continue;
+      if (!graph.hasNode(toId)) continue;
+      if (seen.has(toId)) continue;
+      seen.add(toId);
+      const edge: Edge = { kind: "IMPORTS", from: fromId, to: toId };
+      graph.addEdge(edge);
+    }
+  }
+}
+
+export function fileId(relativePath: string): string {
+  return relativePath.split(path.sep).join("/");
+}
+
+function hash(content: string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
