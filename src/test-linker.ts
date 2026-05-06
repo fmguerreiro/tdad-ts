@@ -70,10 +70,16 @@ function resolveTargets(
 }
 
 function tier3DirectoryProximity(test: FileNode, candidates: FileNode[]): FileNode[] {
-  if (candidates.length === 1) return candidates;
+  // Reject candidates that share no directory ancestry with the test - prevents
+  // prefix truncation from pinning unrelated files across the tree.
+  const close = candidates.filter(
+    (candidate) => sharedPrefixDepth(test.path, candidate.path) >= 1,
+  );
+  if (close.length === 0) return [];
+  if (close.length === 1) return close;
   let best: FileNode | undefined;
   let bestScore = -1;
-  for (const candidate of candidates) {
+  for (const candidate of close) {
     const score = sharedPrefixDepth(test.path, candidate.path);
     if (score > bestScore) {
       bestScore = score;
