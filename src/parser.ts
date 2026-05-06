@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
-import { Project, SyntaxKind, type SourceFile } from "ts-morph";
+import { Project, ts, type SourceFile } from "ts-morph";
 import {
   Graph,
   type ClassNode,
@@ -11,11 +11,19 @@ import {
   type FunctionNode,
 } from "./graph.js";
 import { isTestPath } from "./test-detect.js";
+import {
+  loadCache,
+  rehydrate,
+  saveCache,
+  snapshotFilesystem,
+} from "./cache.js";
 
 export interface IndexOptions {
   root: string;
   include?: string[];
   exclude?: string[];
+  tsConfigFilePath?: string;
+  cachePath?: string;
 }
 
 const DEFAULT_INCLUDE = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
@@ -33,22 +41,30 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   const patterns = options.include ?? DEFAULT_INCLUDE;
   const ignore = [...DEFAULT_EXCLUDE, ...(options.exclude ?? [])];
 
-  const files = await fg(patterns, {
-    cwd: root,
-    ignore,
-    absolute: true,
-    dot: false,
-  });
+  const snapshot = await snapshotFilesystem(root, patterns, ignore);
+
+  if (options.cachePath) {
+    const cached = loadCache(options.cachePath);
+    if (cached && cached.fingerprint === snapshot.fingerprint) {
+      return rehydrate(cached);
+    }
+  }
+
+  const files = snapshot.files.map((file) => path.join(root, file.path));
 
   const project = new Project({
     useInMemoryFileSystem: false,
     skipAddingFilesFromTsConfig: true,
-    skipFileDependencyResolution: true,
-    compilerOptions: {
-      allowJs: true,
-      checkJs: false,
-      noEmit: true,
-    },
+    ...(options.tsConfigFilePath
+      ? { tsConfigFilePath: path.resolve(options.tsConfigFilePath) }
+      : {
+          compilerOptions: {
+            allowJs: true,
+            checkJs: false,
+            noEmit: true,
+            moduleResolution: ts.ModuleResolutionKind.Bundler,
+          },
+        }),
   });
 
   const graph = new Graph();
@@ -75,6 +91,11 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   }
 
   addImports(graph, project, root);
+
+  if (options.cachePath) {
+    saveCache(options.cachePath, graph, snapshot);
+  }
+
   return graph;
 }
 

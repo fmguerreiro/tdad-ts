@@ -59,7 +59,10 @@ export function impactedTests(
     imports(graph, file, strategies.Imports, candidates);
 
     const sorted = [...candidates.values()]
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.testFile.localeCompare(b.testFile);
+      })
       .slice(0, maxTests);
     out.set(changed, sorted);
   }

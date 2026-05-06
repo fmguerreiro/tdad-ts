@@ -13,7 +13,7 @@ export function linkTests(graph: Graph): void {
   const sourcesByStem = indexByStem(sources);
 
   for (const test of tests) {
-    const matches = resolveTargets(test, sources, sourcesByStem);
+    const matches = resolveTargets(test, sources, sourcesByStem, graph);
     for (const match of matches) {
       graph.addEdge({ kind: "TESTS", from: test.id, to: match.id });
     }
@@ -37,6 +37,7 @@ function resolveTargets(
   test: FileNode,
   sources: Map<string, FileNode>,
   index: StemIndex,
+  graph: Graph,
 ): FileNode[] {
   const stem = testStem(test.path);
   const dir = path.posix.dirname(test.path);
@@ -54,7 +55,21 @@ function resolveTargets(
     if (parentMatch) return [parentMatch];
   }
 
-  // Tier 2: progressive prefix truncation across whole tree.
+  // Tier 1c: exact stem match anywhere, but only if the test directly imports
+  // the source. Catches projects with a separate tests/ directory that mirrors
+  // source names (e.g. tests/unit/foo.test.ts paired with components/foo.ts).
+  const stemMatches = index.exact.get(stem);
+  if (stemMatches && stemMatches.length > 0) {
+    const importedTargets: FileNode[] = [];
+    for (const candidate of stemMatches) {
+      if (testImportsSource(graph, test.id, candidate.id)) {
+        importedTargets.push(candidate);
+      }
+    }
+    if (importedTargets.length > 0) return importedTargets;
+  }
+
+  // Tier 2: progressive prefix truncation, filtered by directory proximity.
   let candidate = stem;
   while (candidate.length > 0) {
     const matches = index.exact.get(candidate);
@@ -67,6 +82,13 @@ function resolveTargets(
   }
 
   return [];
+}
+
+function testImportsSource(graph: Graph, testId: string, sourceId: string): boolean {
+  for (const edge of graph.outgoing(testId, "IMPORTS")) {
+    if (edge.to === sourceId) return true;
+  }
+  return false;
 }
 
 function tier3DirectoryProximity(test: FileNode, candidates: FileNode[]): FileNode[] {
