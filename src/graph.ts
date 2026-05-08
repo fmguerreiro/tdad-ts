@@ -5,6 +5,7 @@ export type EdgeKind =
   | "IMPORTS"
   | "INHERITS"
   | "TESTS"
+  | "ROUTE"
   | "COVERAGE";
 
 export interface FileNode {
