@@ -31,6 +31,7 @@ export async function snapshotFilesystem(
   patterns: string[],
   ignore: string[],
   tsConfigHash?: string,
+  coverageHash?: string,
 ): Promise<FilesystemSnapshot> {
   const absoluteRoot = path.resolve(root);
   const found = await fg(patterns, {
@@ -46,7 +47,7 @@ export async function snapshotFilesystem(
     files.push({ path: relative, contentHash: hashContent(content) });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
-  const fingerprint = manifestFingerprint(files, tsConfigHash);
+  const fingerprint = manifestFingerprint(files, tsConfigHash, coverageHash);
   const filesByPath = new Map(files.map((file) => [file.path, file.contentHash]));
   return { files, fingerprint, filesByPath };
 }
@@ -108,6 +109,7 @@ function isCachePayload(value: unknown): value is CachePayload {
 function manifestFingerprint(
   files: CacheFileSnapshot[],
   tsConfigHash: string | undefined,
+  coverageHash: string | undefined,
 ): string {
   const hash = createHash("sha256");
   for (const file of files) {
@@ -119,6 +121,11 @@ function manifestFingerprint(
   if (tsConfigHash !== undefined) {
     hash.update("tsconfig\0");
     hash.update(tsConfigHash);
+    hash.update("\n");
+  }
+  if (coverageHash !== undefined) {
+    hash.update("coverage\0");
+    hash.update(coverageHash);
     hash.update("\n");
   }
   return hash.digest("hex").slice(0, 32);

@@ -17,16 +17,18 @@ program
   .option("-o, --out <file>", "output file", "test_map.txt")
   .option("--tsconfig <path>", "tsconfig.json to source compilerOptions and paths from")
   .option("--cache <path>", "cache file path; reuses graph if file hashes are unchanged")
+  .option("--coverage <path>", "coverage JSON file mapping test files to covered source files")
   .option("--max-tests <n>", "max tests per source file", (value) => Number(value), 50)
   .action(
     async (
       root: string,
-      options: { out: string; maxTests: number; tsconfig?: string; cache?: string },
+      options: { out: string; maxTests: number; tsconfig?: string; cache?: string; coverage?: string },
     ) => {
       const graph = await buildGraph({
         root,
         ...(options.tsconfig ? { tsConfigFilePath: options.tsconfig } : {}),
         ...(options.cache ? { cachePath: options.cache } : {}),
+        ...(options.coverage ? { coveragePath: options.coverage } : {}),
       });
       linkTests(graph);
       const entries = buildMap(graph, { maxTests: options.maxTests });
@@ -44,17 +46,19 @@ program
   .argument("<files...>", "changed files (relative to root)")
   .option("--tsconfig <path>", "tsconfig.json to source compilerOptions and paths from")
   .option("--cache <path>", "cache file path; reuses graph if file hashes are unchanged")
+  .option("--coverage <path>", "coverage JSON file mapping test files to covered source files")
   .option("--max-tests <n>", "max tests per source file", (value) => Number(value), 50)
   .action(
     async (
       root: string,
       files: string[],
-      options: { maxTests: number; tsconfig?: string; cache?: string },
+      options: { maxTests: number; tsconfig?: string; cache?: string; coverage?: string },
     ) => {
       const graph = await buildGraph({
         root,
         ...(options.tsconfig ? { tsConfigFilePath: options.tsconfig } : {}),
         ...(options.cache ? { cachePath: options.cache } : {}),
+        ...(options.coverage ? { coveragePath: options.coverage } : {}),
       });
       linkTests(graph);
       const ids = files.map((file) => fileId(path.relative(root, path.resolve(root, file))));

@@ -16,6 +16,7 @@ import {
   saveCache,
   snapshotFilesystem,
 } from "./cache.js";
+import { emitCoverageEdges, loadCoverageJson } from "./coverage.js";
 
 export interface IndexOptions {
   root: string;
@@ -23,6 +24,7 @@ export interface IndexOptions {
   exclude?: string[];
   tsConfigFilePath?: string;
   cachePath?: string;
+  coveragePath?: string;
 }
 
 const DEFAULT_INCLUDE = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
@@ -43,7 +45,10 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   const tsConfigHash = options.tsConfigFilePath
     ? hashContent(fs.readFileSync(path.resolve(options.tsConfigFilePath), "utf8"))
     : undefined;
-  const snapshot = await snapshotFilesystem(root, patterns, ignore, tsConfigHash);
+  const coverageHash = options.coveragePath
+    ? hashContent(fs.readFileSync(path.resolve(options.coveragePath), "utf8"))
+    : undefined;
+  const snapshot = await snapshotFilesystem(root, patterns, ignore, tsConfigHash, coverageHash);
 
   if (options.cachePath) {
     const cached = loadCache(options.cachePath);
@@ -93,6 +98,11 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   }
 
   addImports(graph, project, root);
+
+  if (options.coveragePath) {
+    const coverage = loadCoverageJson(path.resolve(options.coveragePath));
+    emitCoverageEdges(graph, root, coverage);
+  }
 
   if (options.cachePath) {
     saveCache(options.cachePath, graph, snapshot);
