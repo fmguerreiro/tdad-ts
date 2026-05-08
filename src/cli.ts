@@ -7,6 +7,13 @@ import { buildMap, renderMap, writeMap } from "./map-writer.js";
 import { fileId } from "./parser.js";
 import { Graph } from "./graph.js";
 
+interface CommonOptions {
+  maxTests: number;
+  tsconfig?: string;
+  cache?: string;
+  registries?: string;
+}
+
 const program = new Command();
 program.name("tdad-ts").description("Graph-based test impact analyzer for TypeScript");
 
@@ -17,16 +24,21 @@ program
   .option("-o, --out <file>", "output file", "test_map.txt")
   .option("--tsconfig <path>", "tsconfig.json to source compilerOptions and paths from")
   .option("--cache <path>", "cache file path; reuses graph if file hashes are unchanged")
+  .option(
+    "--registries <path>",
+    "JSON config describing Next.js routes and registry-based dispatch patterns",
+  )
   .option("--max-tests <n>", "max tests per source file", (value) => Number(value), 50)
   .action(
     async (
       root: string,
-      options: { out: string; maxTests: number; tsconfig?: string; cache?: string },
+      options: CommonOptions & { out: string },
     ) => {
       const graph = await buildGraph({
         root,
         ...(options.tsconfig ? { tsConfigFilePath: options.tsconfig } : {}),
         ...(options.cache ? { cachePath: options.cache } : {}),
+        ...(options.registries ? { registriesConfigPath: options.registries } : {}),
       });
       linkTests(graph);
       const entries = buildMap(graph, { maxTests: options.maxTests });
@@ -44,17 +56,22 @@ program
   .argument("<files...>", "changed files (relative to root)")
   .option("--tsconfig <path>", "tsconfig.json to source compilerOptions and paths from")
   .option("--cache <path>", "cache file path; reuses graph if file hashes are unchanged")
+  .option(
+    "--registries <path>",
+    "JSON config describing Next.js routes and registry-based dispatch patterns",
+  )
   .option("--max-tests <n>", "max tests per source file", (value) => Number(value), 50)
   .action(
     async (
       root: string,
       files: string[],
-      options: { maxTests: number; tsconfig?: string; cache?: string },
+      options: CommonOptions,
     ) => {
       const graph = await buildGraph({
         root,
         ...(options.tsconfig ? { tsConfigFilePath: options.tsconfig } : {}),
         ...(options.cache ? { cachePath: options.cache } : {}),
+        ...(options.registries ? { registriesConfigPath: options.registries } : {}),
       });
       linkTests(graph);
       const ids = files.map((file) => fileId(path.relative(root, path.resolve(root, file))));

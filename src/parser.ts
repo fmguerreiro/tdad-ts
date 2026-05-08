@@ -16,6 +16,8 @@ import {
   saveCache,
   snapshotFilesystem,
 } from "./cache.js";
+import { buildRouteTable, emitRouteEdges } from "./route-table.js";
+import { emitRegistryEdges, loadRegistryConfig } from "./registries.js";
 
 export interface IndexOptions {
   root: string;
@@ -23,6 +25,7 @@ export interface IndexOptions {
   exclude?: string[];
   tsConfigFilePath?: string;
   cachePath?: string;
+  registriesConfigPath?: string;
 }
 
 const DEFAULT_INCLUDE = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
@@ -43,7 +46,11 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   const tsConfigHash = options.tsConfigFilePath
     ? hashContent(fs.readFileSync(path.resolve(options.tsConfigFilePath), "utf8"))
     : undefined;
-  const snapshot = await snapshotFilesystem(root, patterns, ignore, tsConfigHash);
+  const registriesHash = options.registriesConfigPath
+    ? hashContent(fs.readFileSync(path.resolve(options.registriesConfigPath), "utf8"))
+    : undefined;
+  const fingerprintExtras = [tsConfigHash, registriesHash].filter((value): value is string => value !== undefined).join(":") || undefined;
+  const snapshot = await snapshotFilesystem(root, patterns, ignore, fingerprintExtras);
 
   if (options.cachePath) {
     const cached = loadCache(options.cachePath);
@@ -93,6 +100,21 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   }
 
   addImports(graph, project, root);
+
+  if (options.registriesConfigPath) {
+    const config = loadRegistryConfig(path.resolve(options.registriesConfigPath));
+    if (config.routes) {
+      const absoluteAppDir = path.resolve(root, config.routes.appDir);
+      if (!fs.existsSync(absoluteAppDir)) {
+        throw new Error(`registries config routes.appDir not found: ${absoluteAppDir}`);
+      }
+      const routes = await buildRouteTable(root, config.routes.appDir, config.routes.fileNames);
+      emitRouteEdges(graph, project, root, routes);
+    }
+    if (config.registries) {
+      await emitRegistryEdges(graph, project, root, config.registries);
+    }
+  }
 
   if (options.cachePath) {
     saveCache(options.cachePath, graph, snapshot);

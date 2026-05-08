@@ -1,6 +1,6 @@
 import { Graph, type FileNode } from "./graph.js";
 
-export type Strategy = "Direct" | "Transitive" | "Imports";
+export type Strategy = "Direct" | "Route" | "Transitive" | "Imports";
 export type Tier = "high" | "medium" | "low";
 
 export interface StrategyConfig {
@@ -13,6 +13,7 @@ export interface StrategyConfig {
 // sibling test, swamping real signal.
 export const DEFAULT_STRATEGIES: Record<Strategy, StrategyConfig> = {
   Direct: { weight: 0.95, confidence: 1.0 },
+  Route: { weight: 0.9, confidence: 0.7 },
   Transitive: { weight: 0.7, confidence: 0.56 },
   Imports: { weight: 0.5, confidence: 0.45 },
 };
@@ -55,6 +56,7 @@ export function impactedTests(
 
     const candidates = new Map<string, ImpactedTest>();
     direct(graph, file, strategies.Direct, candidates);
+    route(graph, file, strategies.Route, candidates);
     transitive(graph, file, strategies.Transitive, maxHops, candidates);
     imports(graph, file, strategies.Imports, candidates);
 
@@ -93,6 +95,19 @@ function direct(
         }
       }
     }
+  }
+}
+
+function route(
+  graph: Graph,
+  file: FileNode,
+  config: StrategyConfig,
+  acc: Map<string, ImpactedTest>,
+): void {
+  for (const edge of graph.incoming(file.id, "ROUTE")) {
+    const caller = graph.getNode(edge.from);
+    if (caller.kind !== "File" || !caller.isTest) continue;
+    record(acc, caller.path, "Route", scoreOf(config));
   }
 }
 
