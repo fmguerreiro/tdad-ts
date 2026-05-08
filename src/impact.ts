@@ -103,26 +103,77 @@ function transitive(
   maxHops: number,
   acc: Map<string, ImpactedTest>,
 ): void {
-  // BFS over reverse IMPORTS up to maxHops; tests linking to any reached file count.
+  // BFS over reverse IMPORTS (file level) and reverse CALLS (function level) up to maxHops.
+  // CALLS edges narrow the blast radius: only files containing functions that actually call
+  // into the changed file's functions are included, rather than every file that imports it.
   const reached = new Set<string>();
-  let frontier = new Set<string>([file.id]);
+
+  // Collect the IDs of all function nodes in the changed file.
+  const changedFileFunctionIds = new Set<string>(
+    graph.outgoing(file.id, "CONTAINS")
+      .filter((edge) => {
+        const node = graph.getNode(edge.to);
+        return node.kind === "Function";
+      })
+      .map((edge) => edge.to),
+  );
+
+  // Determine whether we have CALLS data for the changed file (any reverse-CALLS edges
+  // pointing to this file's functions). If no CALLS data exists, fall back to file-level
+  // IMPORTS so we never regress files where call resolution couldn't find a callee.
+  const hasCallsData = changedFileFunctionIds.size > 0 && [...changedFileFunctionIds].some(
+    (functionId) => graph.incoming(functionId, "CALLS").length > 0,
+  );
+
+  // Frontier tracks file IDs for file-level IMPORTS hops, and function IDs for CALLS hops.
+  // We run both in parallel, merging reached file IDs.
+  let fileFrontier = new Set<string>([file.id]);
+  // For CALLS: start from the functions in the changed file.
+  let callsFrontier = new Set<string>(changedFileFunctionIds);
+
   for (let hop = 0; hop < maxHops; hop += 1) {
-    const next = new Set<string>();
-    for (const id of frontier) {
-      for (const edge of graph.incoming(id, "IMPORTS")) {
-        if (!reached.has(edge.from) && edge.from !== file.id) {
-          reached.add(edge.from);
-          next.add(edge.from);
+    const nextFileFrontier = new Set<string>();
+
+    // File-level IMPORTS BFS (used as fallback or when no CALLS data narrows it).
+    if (!hasCallsData) {
+      for (const id of fileFrontier) {
+        for (const edge of graph.incoming(id, "IMPORTS")) {
+          if (!reached.has(edge.from) && edge.from !== file.id) {
+            reached.add(edge.from);
+            nextFileFrontier.add(edge.from);
+          }
         }
       }
     }
-    if (next.size === 0) break;
-    frontier = next;
+
+    // Function-level CALLS BFS.
+    const nextCallsFrontier = new Set<string>();
+    for (const functionId of callsFrontier) {
+      for (const edge of graph.incoming(functionId, "CALLS")) {
+        const callerNode = graph.getNode(edge.from);
+        if (callerNode.kind !== "Function") continue;
+        const callerFileId = callerNode.file;
+        if (callerFileId === file.id) continue;
+        if (!reached.has(callerFileId)) {
+          reached.add(callerFileId);
+        }
+        // Continue BFS: the caller function's file may have its own callers.
+        // Add the caller function to the next frontier for the next hop.
+        if (!nextCallsFrontier.has(edge.from)) {
+          nextCallsFrontier.add(edge.from);
+        }
+      }
+    }
+
+    if (nextFileFrontier.size === 0 && nextCallsFrontier.size === 0) break;
+    fileFrontier = nextFileFrontier;
+    callsFrontier = nextCallsFrontier;
   }
-  for (const importerId of reached) {
-    const importer = graph.getNode(importerId);
-    if (importer.kind !== "File") continue;
-    addTestsForFile(graph, importer, "Transitive", config, acc);
+
+  for (const reachedFileId of reached) {
+    const reachedFile = graph.getNode(reachedFileId);
+    if (reachedFile.kind !== "File") continue;
+    addTestsForFile(graph, reachedFile, "Transitive", config, acc);
   }
 }
 

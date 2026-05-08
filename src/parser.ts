@@ -93,6 +93,7 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   }
 
   addImports(graph, project, root);
+  addCalls(graph, project, root);
 
   if (options.cachePath) {
     saveCache(options.cachePath, graph, snapshot);
@@ -179,6 +180,100 @@ function addImports(graph: Graph, project: Project, root: string): void {
       graph.addEdge(edge);
     }
   }
+}
+
+// Maps local identifier name → the exported function name it refers to and the source file path.
+interface ImportedBinding {
+  exportedName: string;
+  sourceFileId: string;
+}
+
+function addCalls(graph: Graph, project: Project, root: string): void {
+  for (const sourceFile of project.getSourceFiles()) {
+    const fromRelative = path.relative(root, sourceFile.getFilePath());
+    const fromFileId = fileId(fromRelative);
+
+    // Build a map from local name → ImportedBinding for all named imports in this file.
+    // Use the ts-morph import declarations (already resolved) to avoid redundant work.
+    const importedBindings = new Map<string, ImportedBinding>();
+    for (const declaration of sourceFile.getImportDeclarations()) {
+      const targetSourceFile = declaration.getModuleSpecifierSourceFile();
+      if (!targetSourceFile) continue;
+      const targetRelative = path.relative(root, targetSourceFile.getFilePath());
+      if (targetRelative.startsWith("..") || path.isAbsolute(targetRelative)) continue;
+      const targetFileId = fileId(targetRelative);
+      for (const specifier of declaration.getNamedImports()) {
+        const localName = specifier.getAliasNode()?.getText() ?? specifier.getName();
+        importedBindings.set(localName, {
+          exportedName: specifier.getName(),
+          sourceFileId: targetFileId,
+        });
+      }
+    }
+
+    // Walk the raw TypeScript AST directly to avoid ts-morph wrapper allocation overhead.
+    const emittedEdges = new Set<string>();
+    const rawSourceFile = sourceFile.compilerNode;
+    walkForCalls(rawSourceFile, undefined, fromFileId, graph, importedBindings, emittedEdges);
+  }
+}
+
+// Walk the raw TypeScript AST, tracking the nearest enclosing named function/method.
+// Uses ts.forEachChild to avoid allocating ts-morph wrapper nodes for every descendant.
+function walkForCalls(
+  node: ts.Node,
+  enclosingFunctionName: string | undefined,
+  fileId: string,
+  graph: Graph,
+  importedBindings: Map<string, ImportedBinding>,
+  emittedEdges: Set<string>,
+): void {
+  let currentFunctionName = enclosingFunctionName;
+
+  if (
+    node.kind === ts.SyntaxKind.FunctionDeclaration ||
+    node.kind === ts.SyntaxKind.MethodDeclaration
+  ) {
+    const named = node as ts.FunctionDeclaration | ts.MethodDeclaration;
+    const nameNode = named.name;
+    if (nameNode && ts.isIdentifier(nameNode)) {
+      currentFunctionName = nameNode.text;
+    }
+  }
+
+  if (node.kind === ts.SyntaxKind.CallExpression && currentFunctionName !== undefined) {
+    const callExpr = node as ts.CallExpression;
+    if (ts.isIdentifier(callExpr.expression)) {
+      const calleeName = callExpr.expression.text;
+      const callerFunctionId = `${fileId}#fn:${currentFunctionName}`;
+      if (graph.hasNode(callerFunctionId)) {
+        let targetFunctionId: string | undefined;
+        const sameFileFunctionId = `${fileId}#fn:${calleeName}`;
+        if (graph.hasNode(sameFileFunctionId) && sameFileFunctionId !== callerFunctionId) {
+          targetFunctionId = sameFileFunctionId;
+        } else {
+          const binding = importedBindings.get(calleeName);
+          if (binding) {
+            const candidate = `${binding.sourceFileId}#fn:${binding.exportedName}`;
+            if (graph.hasNode(candidate)) {
+              targetFunctionId = candidate;
+            }
+          }
+        }
+        if (targetFunctionId !== undefined) {
+          const edgeKey = `${callerFunctionId}→${targetFunctionId}`;
+          if (!emittedEdges.has(edgeKey)) {
+            emittedEdges.add(edgeKey);
+            graph.addEdge({ kind: "CALLS", from: callerFunctionId, to: targetFunctionId });
+          }
+        }
+      }
+    }
+  }
+
+  ts.forEachChild(node, (child) => {
+    walkForCalls(child, currentFunctionName, fileId, graph, importedBindings, emittedEdges);
+  });
 }
 
 export function fileId(relativePath: string): string {
