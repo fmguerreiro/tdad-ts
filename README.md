@@ -22,8 +22,29 @@ Prototype. Single-pass indexer, in-memory graph, file-level test map.
 
 ```bash
 tdad-ts index <project-root> --out test_map.txt
-tdad-ts impacted <changed-file> [<changed-file> ...] --map test_map.txt
+tdad-ts index <project-root> --out test_map.txt --coverage coverage.json
+tdad-ts impacted <project-root> <changed-file> [<changed-file> ...]
+tdad-ts impacted <project-root> <changed-file> --coverage coverage.json
 ```
+
+### Coverage strategy
+
+Pass a JSON file via `--coverage <path>` to enable the Coverage strategy. The
+file maps each test file to the source files it covered at runtime:
+
+```json
+{
+  "version": 1,
+  "tests": {
+    "tests/foo.spec.ts": ["src/used.ts", "src/lib/helper.ts"],
+    "tests/bar.spec.ts": ["src/lib/helper.ts"]
+  }
+}
+```
+
+Paths are project-relative, forward-slash. Generating this file from a test
+runner's raw output (e.g. vitest's v8 coverage report) is a downstream concern
+left to the caller.
 
 ## Algorithm
 

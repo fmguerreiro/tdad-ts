@@ -18,6 +18,7 @@ import {
 } from "./cache.js";
 import { buildRouteTable, emitRouteEdges } from "./route-table.js";
 import { emitRegistryEdges, loadRegistryConfig } from "./registries.js";
+import { emitCoverageEdges, loadCoverageJson } from "./coverage.js";
 
 export interface IndexOptions {
   root: string;
@@ -26,6 +27,7 @@ export interface IndexOptions {
   tsConfigFilePath?: string;
   cachePath?: string;
   registriesConfigPath?: string;
+  coveragePath?: string;
 }
 
 const DEFAULT_INCLUDE = ["**/*.ts", "**/*.tsx", "**/*.mts", "**/*.cts"];
@@ -43,14 +45,24 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   const patterns = options.include ?? DEFAULT_INCLUDE;
   const ignore = [...DEFAULT_EXCLUDE, ...(options.exclude ?? [])];
 
-  const tsConfigHash = options.tsConfigFilePath
-    ? hashContent(fs.readFileSync(path.resolve(options.tsConfigFilePath), "utf8"))
-    : undefined;
-  const registriesHash = options.registriesConfigPath
-    ? hashContent(fs.readFileSync(path.resolve(options.registriesConfigPath), "utf8"))
-    : undefined;
-  const fingerprintExtras = [tsConfigHash, registriesHash].filter((value): value is string => value !== undefined).join(":") || undefined;
-  const snapshot = await snapshotFilesystem(root, patterns, ignore, fingerprintExtras);
+  const extraHashes: Record<string, string> = {};
+  if (options.tsConfigFilePath) {
+    extraHashes.tsconfig = hashContent(
+      fs.readFileSync(path.resolve(options.tsConfigFilePath), "utf8"),
+    );
+  }
+  if (options.registriesConfigPath) {
+    extraHashes.registries = hashContent(
+      fs.readFileSync(path.resolve(options.registriesConfigPath), "utf8"),
+    );
+  }
+  if (options.coveragePath) {
+    const rawCoverage = fs.readFileSync(path.resolve(options.coveragePath), "utf8");
+    const parsedCoverage: unknown = JSON.parse(rawCoverage);
+    const canonicalCoverage = JSON.stringify(parsedCoverage, sortedReplacer);
+    extraHashes.coverage = hashContent(canonicalCoverage);
+  }
+  const snapshot = await snapshotFilesystem(root, patterns, ignore, extraHashes);
 
   if (options.cachePath) {
     const cached = loadCache(options.cachePath);
@@ -115,6 +127,12 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
     if (config.registries) {
       await emitRegistryEdges(graph, project, root, config.registries);
     }
+  }
+
+  if (options.coveragePath) {
+    const resolvedCoveragePath = path.resolve(options.coveragePath);
+    const coverage = loadCoverageJson(resolvedCoveragePath);
+    emitCoverageEdges(graph, coverage, resolvedCoveragePath);
   }
 
   if (options.cachePath) {
@@ -480,4 +498,13 @@ function walkForCalls(
 
 export function fileId(relativePath: string): string {
   return relativePath.split(path.sep).join("/");
+}
+
+function sortedReplacer(_key: string, value: unknown): unknown {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return Object.fromEntries(
+      Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+    );
+  }
+  return value;
 }

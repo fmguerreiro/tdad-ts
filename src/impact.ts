@@ -1,6 +1,6 @@
 import { Graph, type FileNode } from "./graph.js";
 
-export type Strategy = "Direct" | "Route" | "Transitive" | "Imports";
+export type Strategy = "Direct" | "Route" | "Transitive" | "Coverage" | "Imports";
 export type Tier = "high" | "medium" | "low";
 
 export interface StrategyConfig {
@@ -8,13 +8,11 @@ export interface StrategyConfig {
   confidence: number;
 }
 
-// TODO: add Coverage strategy once we wire real test coverage data (e.g. v8/istanbul
-// coverage maps). Static same-directory heuristic is too coarse and fires on every
-// sibling test, swamping real signal.
 export const DEFAULT_STRATEGIES: Record<Strategy, StrategyConfig> = {
   Direct: { weight: 0.95, confidence: 1.0 },
   Route: { weight: 0.9, confidence: 0.7 },
   Transitive: { weight: 0.7, confidence: 0.56 },
+  Coverage: { weight: 0.80, confidence: 0.50 },
   Imports: { weight: 0.5, confidence: 0.45 },
 };
 
@@ -57,6 +55,7 @@ export function impactedTests(
     const candidates = new Map<string, ImpactedTest>();
     direct(graph, file, strategies.Direct, candidates);
     route(graph, file, strategies.Route, candidates);
+    coverage(graph, file, strategies.Coverage, candidates);
     transitive(graph, file, strategies.Transitive, maxHops, candidates);
     imports(graph, file, strategies.Imports, candidates);
 
@@ -108,6 +107,19 @@ function route(
     const caller = graph.getNode(edge.from);
     if (caller.kind !== "File" || !caller.isTest) continue;
     record(acc, caller.path, "Route", scoreOf(config));
+  }
+}
+
+function coverage(
+  graph: Graph,
+  file: FileNode,
+  config: StrategyConfig,
+  acc: Map<string, ImpactedTest>,
+): void {
+  for (const edge of graph.incoming(file.id, "COVERAGE")) {
+    const testNode = graph.getNode(edge.from);
+    if (testNode.kind !== "File") continue;
+    record(acc, testNode.path, "Coverage", scoreOf(config));
   }
 }
 

@@ -12,6 +12,7 @@ interface CommonOptions {
   tsconfig?: string;
   cache?: string;
   registries?: string;
+  coverage?: string;
 }
 
 const program = new Command();
@@ -28,6 +29,7 @@ program
     "--registries <path>",
     "JSON config describing Next.js routes and registry-based dispatch patterns",
   )
+  .option("--coverage <path>", "coverage JSON file mapping test files to covered source files")
   .option("--max-tests <n>", "max tests per source file", (value) => Number(value), 50)
   .action(
     async (
@@ -39,6 +41,7 @@ program
         ...(options.tsconfig ? { tsConfigFilePath: options.tsconfig } : {}),
         ...(options.cache ? { cachePath: options.cache } : {}),
         ...(options.registries ? { registriesConfigPath: options.registries } : {}),
+        ...(options.coverage ? { coveragePath: options.coverage } : {}),
       });
       linkTests(graph);
       const entries = buildMap(graph, { maxTests: options.maxTests });
@@ -60,6 +63,7 @@ program
     "--registries <path>",
     "JSON config describing Next.js routes and registry-based dispatch patterns",
   )
+  .option("--coverage <path>", "coverage JSON file mapping test files to covered source files")
   .option("--max-tests <n>", "max tests per source file", (value) => Number(value), 50)
   .action(
     async (
@@ -72,6 +76,7 @@ program
         ...(options.tsconfig ? { tsConfigFilePath: options.tsconfig } : {}),
         ...(options.cache ? { cachePath: options.cache } : {}),
         ...(options.registries ? { registriesConfigPath: options.registries } : {}),
+        ...(options.coverage ? { coveragePath: options.coverage } : {}),
       });
       linkTests(graph);
       const ids = files.map((file) => fileId(path.relative(root, path.resolve(root, file))));

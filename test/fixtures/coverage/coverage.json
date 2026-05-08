@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "tests": {
+    "tests/some.spec.ts": ["src/used.ts"]
+  }
+}

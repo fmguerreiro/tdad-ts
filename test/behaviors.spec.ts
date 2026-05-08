@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { buildGraph } from "../src/parser.js";
 import { linkTests, tier3DirectoryProximity } from "../src/test-linker.js";
 import { buildMap, renderMap } from "../src/map-writer.js";
+import { Graph } from "../src/graph.js";
 import type { FileNode } from "../src/graph.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -203,5 +204,23 @@ export function check(): number {
     expect(importsEdge(secondGraph, "src/app/page.ts", "src/lib/util.ts")).toEqual(false);
     const secondFingerprint = JSON.parse(fs.readFileSync(cachePath, "utf8")).fingerprint;
     expect(secondFingerprint).not.toEqual(firstFingerprint);
+  });
+});
+
+describe("Graph.addEdge deduplication", () => {
+  it("records only one edge when the same (kind, from, to) triple is added twice", () => {
+    const graph = new Graph();
+    graph.addNode({ kind: "File", id: "a.ts", path: "a.ts", contentHash: "h1", isTest: false });
+    graph.addNode({ kind: "File", id: "b.ts", path: "b.ts", contentHash: "h2", isTest: false });
+
+    graph.addEdge({ kind: "IMPORTS", from: "a.ts", to: "b.ts" });
+    graph.addEdge({ kind: "IMPORTS", from: "a.ts", to: "b.ts" });
+
+    expect(graph.outgoing("a.ts", "IMPORTS")).toEqual([
+      { kind: "IMPORTS", from: "a.ts", to: "b.ts" },
+    ]);
+    expect(graph.incoming("b.ts", "IMPORTS")).toEqual([
+      { kind: "IMPORTS", from: "a.ts", to: "b.ts" },
+    ]);
   });
 });
