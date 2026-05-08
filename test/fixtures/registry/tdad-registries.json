@@ -1,0 +1,20 @@
+{
+  "registries": [
+    {
+      "name": "email-templates",
+      "lookup": {
+        "import": "src/email-builder",
+        "function": "buildEmail",
+        "argIndex": 0
+      },
+      "registered": {
+        "files": "src/templates/*.ts",
+        "key": "basename"
+      }
+    }
+  ],
+  "routes": {
+    "appDir": "app",
+    "fileNames": ["page.ts", "page.tsx", "route.ts", "layout.ts", "layout.tsx"]
+  }
+}

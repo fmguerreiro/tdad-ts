@@ -4,7 +4,8 @@ export type EdgeKind =
   | "CALLS"
   | "IMPORTS"
   | "INHERITS"
-  | "TESTS";
+  | "TESTS"
+  | "ROUTE";
 
 export interface FileNode {
   kind: "File";
