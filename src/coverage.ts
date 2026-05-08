@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { Graph } from "./graph.js";
 import { fileId } from "./parser.js";
 
@@ -10,17 +9,12 @@ interface CoverageJson {
 
 function isCoverageJson(value: unknown): value is CoverageJson {
   if (typeof value !== "object" || value === null) return false;
-  const candidate = value as Record<string, unknown>;
-  if (candidate.version !== 1) return false;
-  if (typeof candidate.tests !== "object" || candidate.tests === null) return false;
-  const tests = candidate.tests as Record<string, unknown>;
-  for (const sources of Object.values(tests)) {
-    if (!Array.isArray(sources)) return false;
-    for (const source of sources) {
-      if (typeof source !== "string") return false;
-    }
-  }
-  return true;
+  if (!("version" in value) || !("tests" in value)) return false;
+  if (value.version !== 1) return false;
+  if (typeof value.tests !== "object" || value.tests === null) return false;
+  return Object.values(value.tests).every(
+    (sources) => Array.isArray(sources) && sources.every((source) => typeof source === "string"),
+  );
 }
 
 export function loadCoverageJson(coveragePath: string): Map<string, Set<string>> {
@@ -47,15 +41,23 @@ export function loadCoverageJson(coveragePath: string): Map<string, Set<string>>
 
 export function emitCoverageEdges(
   graph: Graph,
-  root: string,
   coverage: Map<string, Set<string>>,
+  coveragePath: string,
 ): void {
   for (const [testFile, sources] of coverage) {
-    const testId = fileId(path.relative(root, path.resolve(root, testFile)));
-    if (!graph.hasNode(testId)) continue;
+    const testId = fileId(testFile);
+    if (!graph.hasNode(testId)) {
+      throw new Error(
+        `coverage references unknown test '${testFile}' (from ${coveragePath}); regenerate coverage data or update the project glob`,
+      );
+    }
     for (const source of sources) {
-      const sourceId = fileId(path.relative(root, path.resolve(root, source)));
-      if (!graph.hasNode(sourceId)) continue;
+      const sourceId = fileId(source);
+      if (!graph.hasNode(sourceId)) {
+        throw new Error(
+          `coverage references unknown source '${source}' (from ${coveragePath}); regenerate coverage data or update the project glob`,
+        );
+      }
       graph.addEdge({ kind: "COVERAGE", from: testId, to: sourceId });
     }
   }

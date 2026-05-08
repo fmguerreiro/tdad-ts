@@ -52,6 +52,7 @@ export class Graph {
   readonly nodes = new Map<string, GraphNode>();
   readonly edgesOut = new Map<string, Edge[]>();
   readonly edgesIn = new Map<string, Edge[]>();
+  private readonly edgeKeys = new Set<string>();
 
   addNode(node: GraphNode): void {
     if (this.nodes.has(node.id)) {
@@ -77,6 +78,9 @@ export class Graph {
     if (!this.nodes.has(edge.to)) {
       throw new Error(`edge ${edge.kind} to missing node ${edge.to}`);
     }
+    const key = `${edge.kind}\0${edge.from}\0${edge.to}`;
+    if (this.edgeKeys.has(key)) return;
+    this.edgeKeys.add(key);
     push(this.edgesOut, edge.from, edge);
     push(this.edgesIn, edge.to, edge);
   }

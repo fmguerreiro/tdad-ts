@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildGraph } from "../src/parser.js";
 import { buildMap } from "../src/map-writer.js";
+import { Graph } from "../src/graph.js";
+import { emitCoverageEdges } from "../src/coverage.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const coverageRoot = path.join(here, "fixtures/coverage");
@@ -81,5 +83,70 @@ describe("Coverage strategy", () => {
     const secondEntries = buildMap(secondGraph);
     const secondUsed = secondEntries.find((entry) => entry.source === "src/used.ts");
     expect(secondUsed).toBeUndefined();
+  });
+});
+
+describe("emitCoverageEdges path handling", () => {
+  it("resolves forward-slash relative paths in coverage JSON to the correct node IDs", () => {
+    const graph = new Graph();
+    graph.addNode({
+      kind: "File",
+      id: "tests/some.spec.ts",
+      path: "tests/some.spec.ts",
+      contentHash: "h1",
+      isTest: true,
+    });
+    graph.addNode({
+      kind: "File",
+      id: "src/used.ts",
+      path: "src/used.ts",
+      contentHash: "h2",
+      isTest: false,
+    });
+
+    const coverage = new Map<string, Set<string>>();
+    coverage.set("tests/some.spec.ts", new Set(["src/used.ts"]));
+
+    emitCoverageEdges(graph, coverage, "/fake/coverage.json");
+
+    expect(graph.outgoing("tests/some.spec.ts", "COVERAGE")).toEqual([
+      { kind: "COVERAGE", from: "tests/some.spec.ts", to: "src/used.ts" },
+    ]);
+  });
+
+  it("throws when coverage JSON references a test path not present in the graph", () => {
+    const graph = new Graph();
+    graph.addNode({
+      kind: "File",
+      id: "src/used.ts",
+      path: "src/used.ts",
+      contentHash: "h2",
+      isTest: false,
+    });
+
+    const coverage = new Map<string, Set<string>>();
+    coverage.set("tests/missing.spec.ts", new Set(["src/used.ts"]));
+
+    expect(() => emitCoverageEdges(graph, coverage, "/fake/coverage.json")).toThrow(
+      "coverage references unknown test 'tests/missing.spec.ts' (from /fake/coverage.json)",
+    );
+  });
+
+  it("throws when coverage JSON references a source path not present in the graph", () => {
+    const graph = new Graph();
+    graph.addNode({
+      kind: "File",
+      id: "tests/some.spec.ts",
+      path: "tests/some.spec.ts",
+      contentHash: "h1",
+      isTest: true,
+    });
+
+    const coverage = new Map<string, Set<string>>();
+    coverage.set("tests/some.spec.ts", new Set(["src/missing.ts"]));
+
+    expect(() => emitCoverageEdges(graph, coverage, "/fake/coverage.json")).toThrow(
+      "coverage references unknown source 'src/missing.ts' (from /fake/coverage.json)",
+    );
   });
 });

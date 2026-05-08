@@ -1,6 +1,5 @@
-// fingerprint already absorbs tsconfig content (see snapshotFilesystem signature):
-// when buildGraph passes a tsConfigFilePath, its hash is folded into the manifest
-// fingerprint so cache hits invalidate on tsconfig edits as well as source edits.
+// fingerprint absorbs every entry of `extraHashes` so cached graphs invalidate
+// when external inputs (tsconfig, coverage, etc.) change alongside source edits.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -30,8 +29,7 @@ export async function snapshotFilesystem(
   root: string,
   patterns: string[],
   ignore: string[],
-  tsConfigHash?: string,
-  coverageHash?: string,
+  extraHashes?: Record<string, string>,
 ): Promise<FilesystemSnapshot> {
   const absoluteRoot = path.resolve(root);
   const found = await fg(patterns, {
@@ -47,7 +45,7 @@ export async function snapshotFilesystem(
     files.push({ path: relative, contentHash: hashContent(content) });
   }
   files.sort((a, b) => a.path.localeCompare(b.path));
-  const fingerprint = manifestFingerprint(files, tsConfigHash, coverageHash);
+  const fingerprint = manifestFingerprint(files, extraHashes);
   const filesByPath = new Map(files.map((file) => [file.path, file.contentHash]));
   return { files, fingerprint, filesByPath };
 }
@@ -108,8 +106,7 @@ function isCachePayload(value: unknown): value is CachePayload {
 
 function manifestFingerprint(
   files: CacheFileSnapshot[],
-  tsConfigHash: string | undefined,
-  coverageHash: string | undefined,
+  extraHashes: Record<string, string> | undefined,
 ): string {
   const hash = createHash("sha256");
   for (const file of files) {
@@ -118,15 +115,12 @@ function manifestFingerprint(
     hash.update(file.contentHash);
     hash.update("\n");
   }
-  if (tsConfigHash !== undefined) {
-    hash.update("tsconfig\0");
-    hash.update(tsConfigHash);
-    hash.update("\n");
-  }
-  if (coverageHash !== undefined) {
-    hash.update("coverage\0");
-    hash.update(coverageHash);
-    hash.update("\n");
+  if (extraHashes !== undefined) {
+    for (const [key, value] of Object.entries(extraHashes).sort(([a], [b]) => a.localeCompare(b))) {
+      hash.update(`${key}\0`);
+      hash.update(value);
+      hash.update("\n");
+    }
   }
   return hash.digest("hex").slice(0, 32);
 }

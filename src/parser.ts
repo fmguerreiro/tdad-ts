@@ -42,13 +42,19 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   const patterns = options.include ?? DEFAULT_INCLUDE;
   const ignore = [...DEFAULT_EXCLUDE, ...(options.exclude ?? [])];
 
-  const tsConfigHash = options.tsConfigFilePath
-    ? hashContent(fs.readFileSync(path.resolve(options.tsConfigFilePath), "utf8"))
-    : undefined;
-  const coverageHash = options.coveragePath
-    ? hashContent(fs.readFileSync(path.resolve(options.coveragePath), "utf8"))
-    : undefined;
-  const snapshot = await snapshotFilesystem(root, patterns, ignore, tsConfigHash, coverageHash);
+  const extraHashes: Record<string, string> = {};
+  if (options.tsConfigFilePath) {
+    extraHashes.tsconfig = hashContent(
+      fs.readFileSync(path.resolve(options.tsConfigFilePath), "utf8"),
+    );
+  }
+  if (options.coveragePath) {
+    const rawCoverage = fs.readFileSync(path.resolve(options.coveragePath), "utf8");
+    const parsedCoverage: unknown = JSON.parse(rawCoverage);
+    const canonicalCoverage = JSON.stringify(parsedCoverage, sortedReplacer);
+    extraHashes.coverage = hashContent(canonicalCoverage);
+  }
+  const snapshot = await snapshotFilesystem(root, patterns, ignore, extraHashes);
 
   if (options.cachePath) {
     const cached = loadCache(options.cachePath);
@@ -100,8 +106,9 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   addImports(graph, project, root);
 
   if (options.coveragePath) {
-    const coverage = loadCoverageJson(path.resolve(options.coveragePath));
-    emitCoverageEdges(graph, root, coverage);
+    const resolvedCoveragePath = path.resolve(options.coveragePath);
+    const coverage = loadCoverageJson(resolvedCoveragePath);
+    emitCoverageEdges(graph, coverage, resolvedCoveragePath);
   }
 
   if (options.cachePath) {
@@ -193,4 +200,13 @@ function addImports(graph: Graph, project: Project, root: string): void {
 
 export function fileId(relativePath: string): string {
   return relativePath.split(path.sep).join("/");
+}
+
+function sortedReplacer(_key: string, value: unknown): unknown {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return Object.fromEntries(
+      Object.entries(value).sort(([a], [b]) => a.localeCompare(b)),
+    );
+  }
+  return value;
 }
