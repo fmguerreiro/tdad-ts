@@ -4,6 +4,7 @@ import fg from "fast-glob";
 import { Project, SyntaxKind, type SourceFile, type CallExpression, type ImportDeclaration } from "ts-morph";
 import { Graph } from "./graph.js";
 import { fileId } from "./parser.js";
+import { forEachFileInGraph, addRouteEdgeOnce } from "./route-table.js";
 
 export interface RegistryConfig {
   registries?: RegistryRule[];
@@ -22,8 +23,68 @@ export interface RegistryRule {
   };
   registered: {
     files: string;
-    key: "basename" | "stem";
   };
+}
+
+function validateRegistryConfig(value: unknown): RegistryConfig {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`registries config must be a JSON object`);
+  }
+
+  if ("routes" in value) {
+    const routes = (value as Record<string, unknown>).routes;
+    if (typeof routes !== "object" || routes === null || Array.isArray(routes)) {
+      throw new Error(`registries config: "routes" must be an object`);
+    }
+    const routesObj = routes as Record<string, unknown>;
+    if (typeof routesObj.appDir !== "string") {
+      throw new Error(`registries config: "routes.appDir" must be a string`);
+    }
+    if ("fileNames" in routesObj) {
+      if (!Array.isArray(routesObj.fileNames) || !routesObj.fileNames.every((item) => typeof item === "string")) {
+        throw new Error(`registries config: "routes.fileNames" must be an array of strings`);
+      }
+    }
+  }
+
+  if ("registries" in value) {
+    const registries = (value as Record<string, unknown>).registries;
+    if (!Array.isArray(registries)) {
+      throw new Error(`registries config: "registries" must be an array`);
+    }
+    for (let index = 0; index < registries.length; index++) {
+      const rule = registries[index];
+      if (typeof rule !== "object" || rule === null || Array.isArray(rule)) {
+        throw new Error(`registries config: "registries[${index}]" must be an object`);
+      }
+      const ruleObj = rule as Record<string, unknown>;
+      if (typeof ruleObj.name !== "string") {
+        throw new Error(`registries config: "registries[${index}].name" must be a string`);
+      }
+      if (typeof ruleObj.lookup !== "object" || ruleObj.lookup === null || Array.isArray(ruleObj.lookup)) {
+        throw new Error(`registries config: "registries[${index}].lookup" must be an object`);
+      }
+      const lookup = ruleObj.lookup as Record<string, unknown>;
+      if (typeof lookup.import !== "string") {
+        throw new Error(`registries config: "registries[${index}].lookup.import" must be a string`);
+      }
+      if (typeof lookup.function !== "string") {
+        throw new Error(`registries config: "registries[${index}].lookup.function" must be a string`);
+      }
+      if (typeof lookup.argIndex !== "number" || lookup.argIndex < 0) {
+        throw new Error(`registries config: "registries[${index}].lookup.argIndex" must be a non-negative number`);
+      }
+      if (typeof ruleObj.registered !== "object" || ruleObj.registered === null || Array.isArray(ruleObj.registered)) {
+        throw new Error(`registries config: "registries[${index}].registered" must be an object`);
+      }
+      const registered = ruleObj.registered as Record<string, unknown>;
+      if (typeof registered.files !== "string") {
+        throw new Error(`registries config: "registries[${index}].registered.files" must be a string`);
+      }
+    }
+  }
+
+  return value as RegistryConfig;
 }
 
 export function loadRegistryConfig(configPath: string): RegistryConfig {
@@ -31,8 +92,8 @@ export function loadRegistryConfig(configPath: string): RegistryConfig {
     throw new Error(`registries config not found: ${configPath}`);
   }
   const raw = fs.readFileSync(configPath, "utf8");
-  const parsed = JSON.parse(raw) as RegistryConfig;
-  return parsed;
+  const parsed: unknown = JSON.parse(raw);
+  return validateRegistryConfig(parsed);
 }
 
 export async function emitRegistryEdges(
@@ -44,13 +105,9 @@ export async function emitRegistryEdges(
   for (const rule of rules) {
     const keyToFile = await buildKeyMap(root, rule);
     if (keyToFile.size === 0) continue;
-    for (const sourceFile of project.getSourceFiles()) {
-      const relativePath = path.relative(root, sourceFile.getFilePath()).split(path.sep).join("/");
-      const callerId = fileId(relativePath);
-      const callerNode = graph.nodes.get(callerId);
-      if (!callerNode || callerNode.kind !== "File") continue;
+    forEachFileInGraph(graph, project, root, ({ sourceFile, callerId }) => {
       const aliases = importedAliases(sourceFile, root, rule.lookup.import, rule.lookup.function);
-      if (aliases.size === 0) continue;
+      if (aliases.size === 0) return;
       for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
         const calleeName = calleeIdentifier(call);
         if (!calleeName || !aliases.has(calleeName)) continue;
@@ -60,11 +117,9 @@ export async function emitRegistryEdges(
         if (literal === undefined) continue;
         const targetFile = keyToFile.get(literal);
         if (!targetFile) continue;
-        if (callerId === targetFile) continue;
-        if (graph.outgoing(callerId, "ROUTE").some((edge) => edge.to === targetFile)) continue;
-        graph.addEdge({ kind: "ROUTE", from: callerId, to: targetFile });
+        addRouteEdgeOnce(graph, callerId, targetFile);
       }
-    }
+    });
   }
 }
 
@@ -77,21 +132,19 @@ async function buildKeyMap(root: string, rule: RegistryRule): Promise<Map<string
   });
   for (const match of matches) {
     const id = fileId(match);
-    const key = deriveKey(match, rule.registered.key);
+    const key = deriveKey(match);
     if (map.has(key)) continue;
     map.set(key, id);
   }
   return map;
 }
 
-function deriveKey(filePath: string, mode: "basename" | "stem"): string {
+// Registry keys are always extension-stripped basenames (stems).
+// The "key" field was removed because both modes produced the same result
+// for .ts/.tsx files and the distinction added no real value.
+function deriveKey(filePath: string): string {
   const base = path.basename(filePath);
-  if (mode === "basename") {
-    const lastDot = base.lastIndexOf(".");
-    return lastDot === -1 ? base : base.slice(0, lastDot);
-  }
-  const noExt = base.replace(/\.(ts|tsx|js|jsx|mts|cts)$/, "");
-  return noExt;
+  return base.replace(/\.(ts|tsx|js|jsx|mts|cts)$/, "");
 }
 
 function importedAliases(
@@ -101,9 +154,8 @@ function importedAliases(
   expectedFunction: string,
 ): Set<string> {
   const aliases = new Set<string>();
-  const fileDir = path.dirname(sourceFile.getFilePath());
   for (const declaration of sourceFile.getImportDeclarations()) {
-    if (!moduleSpecifierMatches(declaration, fileDir, root, expectedImport)) continue;
+    if (!moduleSpecifierMatches(declaration, root, expectedImport)) continue;
     for (const namedImport of declaration.getNamedImports()) {
       const name = namedImport.getNameNode().getText();
       const alias = namedImport.getAliasNode()?.getText();
@@ -117,11 +169,9 @@ function importedAliases(
 
 function moduleSpecifierMatches(
   declaration: ImportDeclaration,
-  fileDir: string,
   root: string,
   expected: string,
 ): boolean {
-  const value = declaration.getModuleSpecifierValue();
   const stripExt = (text: string) => text.replace(/\.(js|ts|jsx|tsx|mjs|cjs)$/, "");
   const normalizedExpected = stripExt(expected).replace(/^\.\//, "");
   const target = declaration.getModuleSpecifierSourceFile();
@@ -132,13 +182,7 @@ function moduleSpecifierMatches(
       .join("/");
     if (stripExt(relativeFromRoot) === normalizedExpected) return true;
   }
-  if (value.startsWith(".")) {
-    const resolved = path
-      .normalize(path.join(path.relative(root, fileDir), value))
-      .split(path.sep)
-      .join("/");
-    if (stripExt(resolved) === normalizedExpected) return true;
-  }
+  const value = declaration.getModuleSpecifierValue();
   if (stripExt(value) === stripExt(expected)) return true;
   return false;
 }

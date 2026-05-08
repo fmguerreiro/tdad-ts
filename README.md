@@ -68,7 +68,7 @@ Both are exposed via a single JSON config passed with `--registries`:
     {
       "name": "email-templates",
       "lookup":     { "import": "src/email-builder", "function": "buildEmail", "argIndex": 0 },
-      "registered": { "files":  "src/templates/*.ts", "key": "basename" }
+      "registered": { "files":  "src/templates/*.ts" }
     }
   ]
 }

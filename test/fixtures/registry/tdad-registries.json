@@ -8,8 +8,7 @@
         "argIndex": 0
       },
       "registered": {
-        "files": "src/templates/*.ts",
-        "key": "basename"
+        "files": "src/templates/*.ts"
       }
     }
   ],

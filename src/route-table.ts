@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
-import { Project, SyntaxKind, type SourceFile } from "ts-morph";
-import { Graph } from "./graph.js";
+import { Project, type SourceFile } from "ts-morph";
+import { Graph, type FileNode } from "./graph.js";
 import { fileId } from "./parser.js";
+import { stringLiteralValues } from "./ast-helpers.js";
 
 export interface RoutePattern {
   fileId: string;
@@ -26,7 +27,9 @@ export async function buildRouteTable(
   fileNames: string[] = DEFAULT_FILE_NAMES,
 ): Promise<RoutePattern[]> {
   const absoluteAppDir = path.resolve(root, appDir);
-  if (!fs.existsSync(absoluteAppDir)) return [];
+  if (!fs.existsSync(absoluteAppDir)) {
+    throw new Error(`appDir not found: ${absoluteAppDir}`);
+  }
 
   const patterns = fileNames.map((name) => `**/${name}`);
   const found = await fg(patterns, {
@@ -70,46 +73,66 @@ function isPrivate(segment: string): boolean {
 
 export function routeRegex(url: string): RegExp {
   if (url === "/") return /^\/$/;
-  const parts = url.slice(1).split("/").map((segment) => {
-    if (segment.startsWith("[...") && segment.endsWith("]")) return ".+";
-    if (segment.startsWith("[[...") && segment.endsWith("]]")) return ".*";
-    if (segment.startsWith("[") && segment.endsWith("]")) return "[^/]+";
-    return escapeRegex(segment);
-  });
-  return new RegExp("^/" + parts.join("/") + "/?$");
+  const segments = url.slice(1).split("/");
+  let pattern = "^";
+  for (const segment of segments) {
+    if (segment.startsWith("[[...") && segment.endsWith("]]")) {
+      // Optional catch-all: the leading slash is part of the optional group
+      pattern += "(?:/.+)?";
+    } else if (segment.startsWith("[...") && segment.endsWith("]")) {
+      pattern += "/.+";
+    } else if (segment.startsWith("[") && segment.endsWith("]")) {
+      pattern += "/[^/]+";
+    } else {
+      pattern += "/" + escapeRegex(segment);
+    }
+  }
+  pattern += "/?$";
+  return new RegExp(pattern);
 }
 
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function emitRouteEdges(graph: Graph, project: Project, root: string, routes: RoutePattern[]): void {
-  if (routes.length === 0) return;
+export interface FileInGraph {
+  sourceFile: SourceFile;
+  relativePath: string;
+  callerId: string;
+  fileNode: FileNode;
+}
+
+export function forEachFileInGraph(
+  graph: Graph,
+  project: Project,
+  root: string,
+  callback: (entry: FileInGraph) => void,
+): void {
   for (const sourceFile of project.getSourceFiles()) {
     const relativePath = path.relative(root, sourceFile.getFilePath()).split(path.sep).join("/");
     const callerId = fileId(relativePath);
     const callerNode = graph.nodes.get(callerId);
     if (!callerNode || callerNode.kind !== "File") continue;
-    if (!callerNode.isTest) continue;
-    for (const literal of stringLiterals(sourceFile)) {
-      for (const route of routes) {
-        if (route.match.test(literal)) {
-          if (callerId === route.fileId) continue;
-          if (graph.outgoing(callerId, "ROUTE").some((edge) => edge.to === route.fileId)) continue;
-          graph.addEdge({ kind: "ROUTE", from: callerId, to: route.fileId });
-        }
-      }
-    }
+    callback({ sourceFile, relativePath, callerId, fileNode: callerNode });
   }
 }
 
-function stringLiterals(sourceFile: SourceFile): string[] {
-  const out: string[] = [];
-  for (const node of sourceFile.getDescendantsOfKind(SyntaxKind.StringLiteral)) {
-    out.push(node.getLiteralValue());
-  }
-  for (const node of sourceFile.getDescendantsOfKind(SyntaxKind.NoSubstitutionTemplateLiteral)) {
-    out.push(node.getLiteralValue());
-  }
-  return out;
+export function addRouteEdgeOnce(graph: Graph, fromId: string, toId: string): void {
+  if (fromId === toId) return;
+  if (graph.outgoing(fromId, "ROUTE").some((edge) => edge.to === toId)) return;
+  graph.addEdge({ kind: "ROUTE", from: fromId, to: toId });
+}
+
+export function emitRouteEdges(graph: Graph, project: Project, root: string, routes: RoutePattern[]): void {
+  if (routes.length === 0) return;
+  forEachFileInGraph(graph, project, root, ({ sourceFile, callerId, fileNode }) => {
+    if (!fileNode.isTest) return;
+    for (const literal of stringLiteralValues(sourceFile)) {
+      for (const route of routes) {
+        if (route.match.test(literal)) {
+          addRouteEdgeOnce(graph, callerId, route.fileId);
+        }
+      }
+    }
+  });
 }

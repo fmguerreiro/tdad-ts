@@ -49,7 +49,7 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   const registriesHash = options.registriesConfigPath
     ? hashContent(fs.readFileSync(path.resolve(options.registriesConfigPath), "utf8"))
     : undefined;
-  const fingerprintExtras = combineHashes(tsConfigHash, registriesHash);
+  const fingerprintExtras = [tsConfigHash, registriesHash].filter((value): value is string => value !== undefined).join(":") || undefined;
   const snapshot = await snapshotFilesystem(root, patterns, ignore, fingerprintExtras);
 
   if (options.cachePath) {
@@ -104,6 +104,10 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   if (options.registriesConfigPath) {
     const config = loadRegistryConfig(path.resolve(options.registriesConfigPath));
     if (config.routes) {
+      const absoluteAppDir = path.resolve(root, config.routes.appDir);
+      if (!fs.existsSync(absoluteAppDir)) {
+        throw new Error(`registries config routes.appDir not found: ${absoluteAppDir}`);
+      }
       const routes = await buildRouteTable(root, config.routes.appDir, config.routes.fileNames);
       emitRouteEdges(graph, project, root, routes);
     }
@@ -117,12 +121,6 @@ export async function buildGraph(options: IndexOptions): Promise<Graph> {
   }
 
   return graph;
-}
-
-function combineHashes(...hashes: (string | undefined)[]): string | undefined {
-  const present = hashes.filter((value): value is string => value !== undefined);
-  if (present.length === 0) return undefined;
-  return present.join(":");
 }
 
 function addContains(graph: Graph, sourceFile: SourceFile, relativePath: string): void {
